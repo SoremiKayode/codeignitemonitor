@@ -14,3 +14,12 @@ def test_database_initializes_wal_schema_and_aggregates_usage(tmp_path) -> None:
     assert database.usage_for_prefix("2026-08-30") == (150, 30)
     assert database.usage_for_prefix("2026-08") == (150, 30)
     assert database.integrity_check() == "ok"
+
+
+def test_database_aggregates_proxy_website_usage(tmp_path) -> None:
+    database = Database(tmp_path / "netwatch.sqlite3")
+    database.initialize()
+    timestamp = datetime(2026, 8, 30, 12, tzinfo=UTC)
+    database.record_website_usage(timestamp, "Example.COM", 120, 20)
+    database.record_website_usage(timestamp, "example.com", 30, 10)
+    assert database.website_usage_for_day("2026-08-30") == [("example.com", 150, 30)]

@@ -36,6 +36,12 @@ CREATE TABLE IF NOT EXISTS hourly_usage (
     bytes_received INTEGER NOT NULL DEFAULT 0, bytes_sent INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY(hour, interface_name)
 );
+CREATE TABLE IF NOT EXISTS website_usage (
+    day TEXT NOT NULL, domain TEXT NOT NULL,
+    bytes_received INTEGER NOT NULL DEFAULT 0, bytes_sent INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(day, domain)
+);
+CREATE INDEX IF NOT EXISTS idx_website_usage_day ON website_usage(day);
 CREATE TABLE IF NOT EXISTS applications (
     id INTEGER PRIMARY KEY, executable_path TEXT UNIQUE, display_name TEXT NOT NULL,
     first_seen TEXT NOT NULL, last_seen TEXT NOT NULL
@@ -120,6 +126,18 @@ class Database:
         with self.connect() as connection:
             row = connection.execute("SELECT COALESCE(SUM(bytes_received), 0), COALESCE(SUM(bytes_sent), 0) FROM daily_usage WHERE day LIKE ?", (f"{prefix}%",)).fetchone()
         return int(row[0]), int(row[1])
+
+    def record_website_usage(self, timestamp: datetime, domain: str, received: int, sent: int) -> None:
+        """Persist bytes observed by the explicit local proxy for a hostname."""
+        if not domain or received < 0 or sent < 0:
+            raise ValueError("website usage requires a domain and non-negative byte counts")
+        with self.connect() as connection:
+            connection.execute("INSERT INTO website_usage(day, domain, bytes_received, bytes_sent) VALUES (?, ?, ?, ?) ON CONFLICT(day, domain) DO UPDATE SET bytes_received=bytes_received + excluded.bytes_received, bytes_sent=bytes_sent + excluded.bytes_sent", (timestamp.date().isoformat(), domain.lower(), received, sent))
+
+    def website_usage_for_day(self, day: str, limit: int = 100) -> list[tuple[str, int, int]]:
+        with self.connect() as connection:
+            rows = connection.execute("SELECT domain, bytes_received, bytes_sent FROM website_usage WHERE day = ? ORDER BY bytes_received + bytes_sent DESC, domain LIMIT ?", (day, limit)).fetchall()
+        return [(str(row[0]), int(row[1]), int(row[2])) for row in rows]
 
     def integrity_check(self) -> str:
         with self.connect() as connection:
