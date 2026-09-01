@@ -8,9 +8,12 @@ an informative screen instead of a blank placeholder or inferred data.
 from __future__ import annotations
 
 from collections import deque
+from pathlib import Path
 from collections.abc import Callable
 
 from netwatch.core.models import DashboardSnapshot
+from netwatch.monitors.storage.duplicate import find_duplicates
+from netwatch.monitors.storage.scanner import StorageScanner
 
 
 NAVIGATION = (
@@ -30,9 +33,7 @@ NAVIGATION = (
 )
 
 PAGE_DETAILS = {
-    "Applications": ("Application activity", "Per-application traffic is not measured yet.", "Requires the opt-in Windows advanced provider so traffic can be attributed accurately. NetWatch will never guess which app used your data."),
-    "Websites": ("Website activity", "Domain and browsing activity are private by default.", "Website attribution requires an explicit local-only DNS or browser integration. HTTPS paths and page content are never collected by this dashboard."),
-    "Connections": ("Connection inventory", "Live connection enumeration is planned.", "A future Windows connection provider will show protocol, remote address, state, and the confidence of any process attribution."),
+    "Websites": ("Website activity", "Website byte attribution is not available.", "NetWatch never guesses website usage from connections. Exact website activity needs an explicit, opt-in browser or DNS integration; HTTPS page paths and page content are never collected."),
     "History": ("Usage history", "Historical charts arrive as data is recorded.", "Network totals are stored locally in SQLite. This screen will expand to date ranges and exports as the history query layer is added."),
     "Storage": ("Storage analysis", "Scan a folder to understand disk usage.", "Storage scans are safe and local: inaccessible folders are recorded rather than stopping a scan, and symbolic links are not followed."),
     "LargeFiles": ("Large files", "Find files worth reviewing.", "Choose a storage scan from the Storage section first. Results will be grouped by size, type, and location without deleting anything automatically."),
@@ -60,7 +61,7 @@ def create_main_window(snapshot_provider: Callable[[], DashboardSnapshot]):
     from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
     from PySide6.QtWidgets import (
         QApplication, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-        QMainWindow, QStackedWidget, QVBoxLayout, QWidget,
+        QMainWindow, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
     )
 
     class TrafficChart(QWidget):
@@ -134,7 +135,11 @@ def create_main_window(snapshot_provider: Callable[[], DashboardSnapshot]):
             self.pages.setObjectName("pages")
             self.pages.addWidget(self._overview())
             self.pages.addWidget(self._network_page())
-            for _, key in NAVIGATION[2:]:
+            self.pages.addWidget(self._applications_page())
+            self.pages.addWidget(self._websites_page())
+            self.pages.addWidget(self._connections_page())
+            self.pages.addWidget(self._storage_page())
+            for _, key in NAVIGATION[6:]:
                 self.pages.addWidget(self._info_page(*PAGE_DETAILS[key]))
             layout.addWidget(self.pages, 1)
             self.setCentralWidget(root)
@@ -203,6 +208,58 @@ def create_main_window(snapshot_provider: Callable[[], DashboardSnapshot]):
             column.addStretch()
             return page
 
+        def _applications_page(self) -> QWidget:
+            page, column = self._page_shell("Connection ownership", "Applications with active connections", "This is a live connection inventory—not per-app data consumption. Byte attribution requires a dedicated Windows provider.")
+            panel = QFrame(); panel.setObjectName("panel")
+            layout = QVBoxLayout(panel); layout.addWidget(QLabel("ACTIVE APPLICATIONS", objectName="panelTitle"))
+            self.application_list = QLabel("Waiting for connection inventory…"); self.application_list.setObjectName("inventory"); self.application_list.setWordWrap(True)
+            layout.addWidget(self.application_list); column.addWidget(panel); column.addStretch()
+            return page
+
+        def _websites_page(self) -> QWidget:
+            page, column = self._page_shell("Proxy website usage", "Website data consumption", "Website bytes are recorded only for browsers or apps configured to use NetWatch’s local proxy at 127.0.0.1:8787. HTTPS remains encrypted; NetWatch records the hostname and tunnel byte totals, not pages or content.")
+            notice = QFrame(); notice.setObjectName("disclosure"); notice_layout = QVBoxLayout(notice)
+            notice_layout.addWidget(QLabel("TO CAPTURE WEBSITE USAGE", objectName="panelTitle"))
+            notice_layout.addWidget(QLabel("Set your browser’s HTTP and HTTPS proxy to 127.0.0.1, port 8787. Traffic that bypasses the proxy cannot be assigned to a website."))
+            column.addWidget(notice)
+            self.website_table = QTableWidget(0, 3); self.website_table.setHorizontalHeaderLabels(["Website", "Received", "Sent"]); self.website_table.setObjectName("usageTable")
+            self.website_table.horizontalHeader().setStretchLastSection(True); self.website_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); self.website_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+            column.addWidget(self.website_table, 1)
+            return page
+
+        def _connections_page(self) -> QWidget:
+            page, column = self._page_shell("Live inventory", "Current network connections", "Remote addresses are shown as reported by the operating system. They are not treated as website visits or traffic totals.")
+            carrier = QFrame(); carrier.setObjectName("disclosure"); layout = QVBoxLayout(carrier)
+            layout.addWidget(QLabel("MOBILE NETWORK", objectName="panelTitle"))
+            self.carrier_label = QLabel("Checking Windows mobile broadband…"); self.carrier_label.setObjectName("inventory"); layout.addWidget(self.carrier_label)
+            column.addWidget(carrier)
+            panel = QFrame(); panel.setObjectName("panel"); layout = QVBoxLayout(panel); layout.addWidget(QLabel("ACTIVE REMOTE ENDPOINTS", objectName="panelTitle"))
+            self.connection_list = QLabel("Waiting for connection inventory…"); self.connection_list.setObjectName("inventory"); self.connection_list.setWordWrap(True); layout.addWidget(self.connection_list)
+            column.addWidget(panel); column.addStretch()
+            return page
+
+        def _storage_page(self) -> QWidget:
+            from PySide6.QtWidgets import QFileDialog, QPushButton
+            page, column = self._page_shell("File information", "Storage scan and review", "Choose a folder to calculate its files, size, file types, and duplicate candidates. Scans are local and never delete files.")
+            panel = QFrame(); panel.setObjectName("panel"); layout = QVBoxLayout(panel)
+            button = QPushButton("Choose folder and scan"); button.setObjectName("scanButton"); layout.addWidget(button)
+            self.storage_result = QLabel("No folder scanned yet."); self.storage_result.setObjectName("inventory"); self.storage_result.setWordWrap(True); layout.addWidget(self.storage_result)
+            column.addWidget(panel); column.addStretch()
+            def scan_folder() -> None:
+                selected = QFileDialog.getExistingDirectory(self, "Choose a folder to scan")
+                if not selected:
+                    return
+                self.storage_result.setText("Scanning files locally…")
+                result = StorageScanner().scan(Path(selected))
+                groups = find_duplicates(result.files)
+                largest = sorted(result.files, key=lambda item: item.size_bytes, reverse=True)[:5]
+                types = result.by_extension().most_common(5)
+                largest_text = "\n".join(f"{format_bytes(item.size_bytes)} — {item.path.name}" for item in largest) or "No files found"
+                types_text = ", ".join(f"{extension}: {format_bytes(size)}" for extension, size in types) or "No file types"
+                self.storage_result.setText(f"{len(result.files):,} files · {format_bytes(result.total_bytes)} · {len(result.inaccessible)} inaccessible paths · {len(groups)} duplicate groups\nTop file types: {types_text}\nLargest files:\n{largest_text}")
+            button.clicked.connect(scan_folder)
+            return page
+
         def _info_page(self, title: str, state: str, detail: str) -> QWidget:
             page, column = self._page_shell("Workspace", title, state)
             panel = QFrame(); panel.setObjectName("emptyPanel")
@@ -237,6 +294,23 @@ def create_main_window(snapshot_provider: Callable[[], DashboardSnapshot]):
             self.month_total.setText(format_bytes(snapshot.month_download + snapshot.month_upload))
             self.month_detail.setText(f"↓ {format_bytes(snapshot.month_download)} received   ·   ↑ {format_bytes(snapshot.month_upload)} sent")
             self.chart.append(snapshot.download_bytes_per_second, snapshot.upload_bytes_per_second)
+            activity = snapshot.activity
+            if activity and hasattr(self, "application_list"):
+                self.application_list.setText("\n".join(f"{name} — {count} active connection{'s' if count != 1 else ''}" for name, count in activity.applications[:12]) or "No active internet connections reported.")
+                carrier = activity.carrier
+                provider = carrier.provider_name or "No carrier name reported"
+                interface = f" on {carrier.interface_name}" if carrier.interface_name else ""
+                self.carrier_label.setText(f"{provider}{interface}\n{carrier.source}")
+                self.website_table.setRowCount(len(activity.websites))
+                for row, website in enumerate(activity.websites):
+                    for column, value in enumerate((website.domain, format_bytes(website.bytes_received), format_bytes(website.bytes_sent))):
+                        self.website_table.setItem(row, column, QTableWidgetItem(value))
+                rows = []
+                for item in activity.connections[:12]:
+                    app = item.process_name or (f"PID {item.pid}" if item.pid else "System / unknown")
+                    endpoint = f"{item.remote_address}:{item.remote_port}" if item.remote_address else "No remote endpoint"
+                    rows.append(f"{app}  →  {endpoint}  ·  {item.protocol} {item.state or ''}".strip())
+                self.connection_list.setText("\n".join(rows) or "No active remote connections reported.")
 
     app = QApplication.instance() or QApplication([])
     app.setStyleSheet(STYLESHEET)
@@ -253,5 +327,8 @@ QWidget { background: #0c1322; color: #edf3ff; font: 10pt 'Segoe UI'; }
 #metric { background: #141f34; border: 1px solid #22304b; border-radius: 12px; min-height: 132px; } #metric[accent="blue"] { border-top: 3px solid #59a6ff; } #metric[accent="green"] { border-top: 3px solid #31d0aa; } #metric[accent="violet"] { border-top: 3px solid #a889ff; }
 #metricLabel, #panelTitle { color: #90a4c5; font-size: 8pt; font-weight: 700; letter-spacing: 1.1px; } #metricIcon { color: #8abfff; font-size: 16pt; font-weight: 700; } #metricValue, #heroValue { font-size: 22pt; font-weight: 750; } #metricCaption, #muted { color: #7f91ad; font-size: 9pt; }
 #panel, #emptyPanel, #disclosure { background: #141f34; border: 1px solid #22304b; border-radius: 12px; padding: 16px; } #disclosure { background: #10213a; border-color: #1d4f91; color: #bad7fb; } #emptyPanel { min-height: 175px; } #emptyCopy { color: #b4c1d5; font-size: 11pt; line-height: 1.5; max-width: 650px; }
+#usageTable { background: #141f34; border: 1px solid #22304b; border-radius: 8px; gridline-color: #22304b; } #usageTable::item { padding: 7px; } #usageTable QHeaderView::section { background: #18253d; color: #b4c1d5; border: 0; padding: 8px; font-weight: 700; }
+#scanButton { background: #1d4f91; border: 0; border-radius: 7px; color: white; font-weight: 700; padding: 10px 14px; max-width: 210px; } #scanButton:hover { background: #2b65ae; }
+#inventory { color: #c9d7eb; font-size: 10pt; line-height: 1.7; }
 #legend { color: #59a6ff; font-size: 9pt; } #legend span { color: #31d0aa; } #footer { color: #71829c; font-size: 9pt; } #badge { color: #68d6bb; font-size: 8pt; font-weight: 700; letter-spacing: 1px; padding-top: 18px; }
 """

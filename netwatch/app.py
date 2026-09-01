@@ -11,6 +11,7 @@ from netwatch.core.config import SettingsStore, application_data_dir
 from netwatch.core.database import Database
 from netwatch.monitors.network.system import PsutilNetworkMonitor
 from netwatch.services.monitoring import MonitoringService
+from netwatch.services.local_proxy import LocalUsageProxy
 
 
 def configure_logging() -> None:
@@ -28,7 +29,10 @@ def main(argv: list[str] | None = None) -> int:
     settings = SettingsStore().load()
     service = MonitoringService(PsutilNetworkMonitor(), Database(), settings.monitoring_interval_seconds, settings.flush_interval_seconds)
     service.start()
+    proxy = LocalUsageProxy(service.database)
+    proxy.start()
     if args.headless_check:
+        proxy.stop()
         service.stop()
         return 0
     try:
@@ -41,6 +45,7 @@ def main(argv: list[str] | None = None) -> int:
         print("PySide6 is required for the desktop UI. Install project dependencies first.", file=sys.stderr)
         return 2
     finally:
+        proxy.stop()
         service.stop()
 
 

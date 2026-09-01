@@ -6,6 +6,10 @@ NetWatch Analyzer is a **visible, local-first Windows desktop foundation** for m
 
 - A PySide6 dark dashboard shell driven by a background monitoring service.
 - Real interface-level receive/send counters through `psutil`, sampled in memory and flushed to SQLite in batches.
+- Live active-connection inventory, including the operating-system-reported owning process where permission allows; this is clearly separated from byte attribution.
+- An opt-in localhost web proxy that records per-hostname inbound/outbound tunnel bytes for browsers explicitly configured to use `127.0.0.1:8787`, with a live Websites table backed by SQLite.
+- Best-effort mobile-carrier identification for Windows Mobile Broadband connections (for example MTN, Airtel, or Glo) through `netsh mbn`; it reports unavailable rather than guessing.
+- Local folder scan UI that summarizes file count, file types, largest files, inaccessible paths, and duplicate candidate groups without changing or deleting files.
 - SQLite WAL database with raw samples and hourly/daily rollups, integrity checks, and indexed time queries.
 - Safe storage scan: iterative traversal, cancellation, permission-error collection, default exclusions, and no symbolic-link recursion.
 - Staged duplicate detection: equal-size candidates, partial SHA-256, then full SHA-256.
@@ -13,7 +17,7 @@ NetWatch Analyzer is a **visible, local-first Windows desktop foundation** for m
 
 ## Accuracy and privacy
 
-Interface traffic is currently the only traffic shown as measured. It is **not assigned to processes**. Process-level byte counts, domain traffic attribution, DNS events, and browser URL history are not implemented by this initial foundation and must remain unavailable until an audited Windows ETW/WFP provider and explicit attribution confidence model are added.
+Interface counters and bytes flowing through the opt-in local web proxy are the only traffic shown as measured bytes. Active connections can be associated with a process when the operating system permits it, but those connections are **not byte attribution**. Process-level byte counts, domain traffic attribution, DNS events, and browser URL history are not implemented and must remain unavailable until an audited Windows ETW/WFP provider and explicit attribution confidence model are added. A carrier name is shown only when Windows Mobile Broadband supplies it; Wi-Fi names, IP ranges, and remote endpoints are never used to infer a carrier.
 
 All data stays in the current user's local application-data directory by default. The application has no remote API, no stealth persistence, and does not collect passwords, cookies, keystrokes, page content, or authentication tokens. HTTPS encrypts URL paths; domain activity and exact browser navigation are separate capabilities.
 
@@ -23,6 +27,7 @@ All data stays in the current user's local application-data directory by default
 PySide6 dashboard -> MonitoringService -> NetworkMonitor provider -> SQLite (WAL)
                                           -> bounded NetworkAggregator
 StorageScanner / duplicate detector -----------------------------> UI or repository
+Psutil connection inventory + Windows carrier detector ---------> MonitoringService -> UI
 ```
 
 The UI only reads service snapshots; it does not access SQLite or operating-system counters directly. `NetworkMonitor` is an interface, allowing a future Windows-native advanced provider and the included mock provider to be swapped in without changing the UI.

@@ -7,8 +7,9 @@ import threading
 from datetime import UTC, datetime
 
 from netwatch.core.database import Database
-from netwatch.core.models import DashboardSnapshot
+from netwatch.core.models import ActivitySnapshot, DashboardSnapshot, WebsiteUsage
 from netwatch.monitors.network.base import NetworkMonitor
+from netwatch.monitors.network.carrier import WindowsCarrierDetector
 from netwatch.services.aggregation import NetworkAggregator
 
 
@@ -22,6 +23,9 @@ class MonitoringService:
         self._snapshot = DashboardSnapshot(datetime.now(UTC), 0, 0, 0, 0, 0, 0)
         self._lock = threading.Lock()
         self._log = logging.getLogger(__name__)
+        self._carrier_detector = WindowsCarrierDetector()
+        self._activity = ActivitySnapshot()
+        self._last_activity_refresh: datetime | None = None
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -50,12 +54,21 @@ class MonitoringService:
                 if (now - last_flush).total_seconds() >= self.flush_interval:
                     self.database.record_deltas(self.aggregator.drain())
                     last_flush = now
+                if self._last_activity_refresh is None or (now - self._last_activity_refresh).total_seconds() >= 5:
+                    connections = tuple(self.provider.connections())
+                    counts: dict[str, int] = {}
+                    for connection in connections:
+                        name = connection.process_name or (f"PID {connection.pid}" if connection.pid else "System / unknown")
+                        counts[name] = counts.get(name, 0) + 1
+                    websites = tuple(WebsiteUsage(domain, received, sent) for domain, received, sent in self.database.website_usage_for_day(now.date().isoformat()))
+                    self._activity = ActivitySnapshot(tuple(sorted(counts.items(), key=lambda item: (-item[1], item[0]))), connections, self._carrier_detector.detect(), websites)
+                    self._last_activity_refresh = now
                 day = now.date().isoformat()
                 month = now.strftime("%Y-%m")
                 today = self.database.usage_for_prefix(day)
                 month_usage = self.database.usage_for_prefix(month)
                 with self._lock:
-                    self._snapshot = DashboardSnapshot(now, received / self.interval, sent / self.interval, *today, *month_usage)
+                    self._snapshot = DashboardSnapshot(now, received / self.interval, sent / self.interval, *today, *month_usage, self._activity)
             except Exception:
                 self._log.exception("Network monitoring iteration failed; monitoring will continue")
         self.database.record_deltas(self.aggregator.drain())
