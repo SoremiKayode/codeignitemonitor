@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Iterator
 
@@ -127,6 +127,18 @@ class Database:
             row = connection.execute("SELECT COALESCE(SUM(bytes_received), 0), COALESCE(SUM(bytes_sent), 0) FROM daily_usage WHERE day LIKE ?", (f"{prefix}%",)).fetchone()
         return int(row[0]), int(row[1])
 
+    def usage_between(self, start: date, end: date) -> list[tuple[str, int, int]]:
+        """Return inclusive daily totals for a user-selected date range."""
+        if end < start:
+            raise ValueError("end date must not be before start date")
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT day, SUM(bytes_received), SUM(bytes_sent) FROM daily_usage "
+                "WHERE day BETWEEN ? AND ? GROUP BY day ORDER BY day",
+                (start.isoformat(), end.isoformat()),
+            ).fetchall()
+        return [(str(row[0]), int(row[1]), int(row[2])) for row in rows]
+
     def record_website_usage(self, timestamp: datetime, domain: str, received: int, sent: int) -> None:
         """Persist bytes observed by the explicit local proxy for a hostname."""
         if not domain or received < 0 or sent < 0:
@@ -137,6 +149,19 @@ class Database:
     def website_usage_for_day(self, day: str, limit: int = 100) -> list[tuple[str, int, int]]:
         with self.connect() as connection:
             rows = connection.execute("SELECT domain, bytes_received, bytes_sent FROM website_usage WHERE day = ? ORDER BY bytes_received + bytes_sent DESC, domain LIMIT ?", (day, limit)).fetchall()
+        return [(str(row[0]), int(row[1]), int(row[2])) for row in rows]
+
+    def website_usage_between(self, start: date, end: date, limit: int = 500) -> list[tuple[str, int, int]]:
+        """Aggregate proxy-observed host traffic across an inclusive range."""
+        if end < start:
+            raise ValueError("end date must not be before start date")
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT domain, SUM(bytes_received), SUM(bytes_sent) FROM website_usage "
+                "WHERE day BETWEEN ? AND ? GROUP BY domain "
+                "ORDER BY SUM(bytes_received) + SUM(bytes_sent) DESC, domain LIMIT ?",
+                (start.isoformat(), end.isoformat(), limit),
+            ).fetchall()
         return [(str(row[0]), int(row[1]), int(row[2])) for row in rows]
 
     def integrity_check(self) -> str:

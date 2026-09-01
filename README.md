@@ -5,11 +5,14 @@ NetWatch Analyzer is a **visible, local-first Windows desktop foundation** for m
 ## Current working capabilities
 
 - A PySide6 dark dashboard shell driven by a background monitoring service.
+- Circular received/sent usage analytics for the last 24 hours, week, month, or an inclusive custom date range.
+- Striped application, website, connection, history, large-file, and duplicate tables with explicit measurement-quality labels.
 - Real interface-level receive/send counters through `psutil`, sampled in memory and flushed to SQLite in batches.
 - Live active-connection inventory, including the operating-system-reported owning process where permission allows; this is clearly separated from byte attribution.
 - An opt-in localhost web proxy that records per-hostname inbound/outbound tunnel bytes for browsers explicitly configured to use `127.0.0.1:8787`, with a live Websites table backed by SQLite.
 - Best-effort mobile-carrier identification for Windows Mobile Broadband connections (for example MTN, Airtel, or Glo) through `netsh mbn`; it reports unavailable rather than guessing.
 - Local folder scan UI that summarizes file count, file types, largest files, inaccessible paths, and duplicate candidate groups without changing or deleting files.
+- Working large-file and duplicate review screens, 30-day CSV reports, monthly usage thresholds, and persisted monitoring preferences.
 - SQLite WAL database with raw samples and hourly/daily rollups, integrity checks, and indexed time queries.
 - Safe storage scan: iterative traversal, cancellation, permission-error collection, default exclusions, and no symbolic-link recursion.
 - Staged duplicate detection: equal-size candidates, partial SHA-256, then full SHA-256.

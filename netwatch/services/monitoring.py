@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from netwatch.core.database import Database
 from netwatch.core.models import ActivitySnapshot, DashboardSnapshot, WebsiteUsage
@@ -43,6 +43,12 @@ class MonitoringService:
     def snapshot(self) -> DashboardSnapshot:
         with self._lock:
             return self._snapshot
+
+    def usage_between(self, start: date, end: date) -> list[tuple[str, int, int]]:
+        return self.database.usage_between(start, end)
+
+    def website_usage_between(self, start: date, end: date) -> list[tuple[str, int, int]]:
+        return self.database.website_usage_between(start, end)
 
     def _run(self) -> None:
         last_flush = datetime.now(UTC)

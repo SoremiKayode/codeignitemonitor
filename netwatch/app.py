@@ -37,7 +37,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     try:
         from netwatch.ui.main_window import create_main_window
-        app, window = create_main_window(service.snapshot)
+        app, window = create_main_window(service)
         window.show()
         return app.exec()
     except ImportError:
